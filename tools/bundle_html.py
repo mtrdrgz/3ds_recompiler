@@ -61,7 +61,7 @@ def main() -> int:
         if not f.exists():
             sys.exit(f'missing {f} — build the web target first (tools/build_web.sh, or cmake without gen/ for an interpreter-only build)')
 
-    html = (web / 'index.html').read_text()
+    html = (web / 'index.html').read_text(encoding='utf-8')
     icon = b64((web / 'icon.png').read_bytes()) if (web / 'icon.png').exists() else ''
 
     # page resources -> inline / data URIs
@@ -71,18 +71,18 @@ def main() -> int:
                             f'<link rel="apple-touch-icon" href="data:image/png;base64,{icon}">\n'
                             f'<link rel="icon" href="data:image/png;base64,{icon}">')
     html = html.replace('<script src="compositor.js"></script>',
-                        inline_script((web / 'compositor.js').read_text(), 'compositor.js'))
+                        inline_script((web / 'compositor.js').read_text(encoding='utf-8'), 'compositor.js'))
     html = html.replace('<script src="app.js"></script>',
                         payload('mod', mod_js.read_bytes()) + '\n' +
                         payload('wasm', wasm.read_bytes()) + '\n' +
                         payload('romWorker', (web / 'rom_worker.js').read_bytes()) + '\n' +
                         payload('audioWorklet', (web / 'audio_worklet.js').read_bytes()) + '\n' +
-                        inline_script((web / 'app.js').read_text(), 'app.js'))
+                        inline_script((web / 'app.js').read_text(encoding='utf-8'), 'app.js'))
     if '<script src=' in html:
         sys.exit('index.html has a <script src=> the bundler does not know')
 
     out = Path(args.output) if args.output else build / 'recomp3ds.html'
-    out.write_text(html)
+    out.write_text(html, encoding='utf-8')
     size = out.stat().st_size
     print(f'wrote {out} ({size / 1048576:.1f} MiB)')
     print('note: serve it, file:// cannot provide SharedArrayBuffer —')
