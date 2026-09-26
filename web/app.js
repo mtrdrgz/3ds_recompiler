@@ -33,6 +33,15 @@ for (const k of ['layout', 'filter', 'aspect', 'bottomMode']) if (params.get(k))
 const saveSettings = () => { try { localStorage.setItem('r3ds-display', JSON.stringify(settings)); } catch (e) {} };
 const r3ds = window.r3ds = { Module: null, frames: 0, fps: 0, bytesRead: 0, started: false, errors: [] };
 
+// ------------------------------------------------ single-file build (tools/bundle_html.py)
+// In the bundled page every runtime payload lives in a
+// <script type="text/plain" data-r3ds="name"> element holding base64.
+// All of these are null in the normal multi-file build.
+const EMBED = {};
+for (const el of document.querySelectorAll('script[data-r3ds]')) EMBED[el.dataset.r3ds] = el.textContent.trim();
+const embBytes = (k) => EMBED[k] ? Uint8Array.from(atob(EMBED[k]), (c) => c.charCodeAt(0)) : null;
+const embURL = (k, type) => { const b = embBytes(k); return b ? URL.createObjectURL(new Blob([b], { type })) : null; };
+
 // a short note over the status bar (quick keys)
 let flashTimer = 0;
 function flash(msg) {
@@ -53,7 +62,9 @@ function logLine(s) {
 // ------------------------------------------------ cross-origin isolation
 async function ensureIsolation() {
   if (self.crossOriginIsolated) return true;
-  if ('serviceWorker' in navigator && !sessionStorage.getItem('coi-reloaded')) {
+  // the bundled service worker can only help the multi-file build; a single
+  // file cannot register one (blob: is not a valid SW script URL)
+  if (!EMBED.mod && 'serviceWorker' in navigator && !sessionStorage.getItem('coi-reloaded')) {
     try {
       await navigator.serviceWorker.register('coi-sw.js');
       await navigator.serviceWorker.ready;
@@ -62,9 +73,11 @@ async function ensureIsolation() {
       return false;
     } catch (e) { /* fall through */ }
   }
-  showError('This page needs cross-origin isolation (SharedArrayBuffer for threads). Serve it with\n' +
-            '  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n' +
-            '(tools/serve_web.py does this), or over https/localhost so the bundled service worker can add them.');
+  const how = EMBED.mod ?
+    'Serve this file over HTTP(S) — e.g. `python3 -m http.server` cannot set headers, use tools/serve_web.py or any host that sends the headers below. file:// pages can never be cross-origin isolated.' :
+    'Serve it with tools/serve_web.py (it sets the headers), or over https/localhost so the bundled service worker can add them.';
+  showError('This page needs cross-origin isolation (SharedArrayBuffer for threads).\n' +
+            '  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n' + how);
   return false;
 }
 
@@ -79,7 +92,7 @@ function makeAudio() {
 async function startAudio(Module) {
   if (!audioCtx) return;
   try {
-    await audioCtx.audioWorklet.addModule('audio_worklet.js');
+    await audioCtx.audioWorklet.addModule(embURL('audioWorklet', 'text/javascript') || 'audio_worklet.js');
     audioNode = new AudioWorkletNode(audioCtx, 'r3ds-audio', { numberOfInputs: 0, outputChannelCount: [2] });
     audioNode.port.postMessage({ mem: Module.wasmMemory, ring: Module._web_audio_ring() });
     audioNode.connect(audioCtx.destination);
@@ -108,12 +121,18 @@ async function start(source) {
   for (const p of document.querySelectorAll('main > .panel')) p.style.display = 'none';
   $('status').textContent = 'loading the recompiled game…';
   try {
-    if (!window.createR3DS) await loadScript('recomp3ds.js');
+    // embedded single-file build: load the module from a blob URL — its src
+    // becomes _scriptName, so pthread workers spawn from the same blob
+    if (!window.createR3DS) await loadScript(embURL('mod', 'text/javascript') || 'recomp3ds.js');
+    const wasmURL = embURL('wasm', 'application/wasm');
+    const wasmBytes = embBytes('wasm');
     const env = { R3DS_MMO: params.get('multiplayer') === '0' ? '0' : '1' };
     if (params.get('room')) env.R3DS_MMO_ROOM = params.get('room').slice(0, 64);
     if (params.get('multiplayerUrl')) env.R3DS_MMO_URL = params.get('multiplayerUrl');
     for (const kv of params.getAll('env')) { const i = kv.indexOf('='); if (i > 0) env[kv.slice(0, i)] = kv.slice(i + 1); }
     const Module = await window.createR3DS({
+      ...(wasmURL ? { locateFile: (p) => p.endsWith('.wasm') ? wasmURL : p } : {}),
+      ...(wasmBytes ? { wasmBinary: wasmBytes.buffer } : {}),
       print: (s) => logLine(s),
       printErr: (s) => logLine(s),
       preRun: [(M) => {
@@ -130,7 +149,8 @@ async function start(source) {
     r3ds.Module = Module;
     loadTexturePack(Module);
     // ROM streaming worker
-    const worker = new Worker('rom_worker.js' + (params.get('block') ? '?block=' + params.get('block') : ''));
+    const worker = new Worker((embURL('romWorker', 'text/javascript') || 'rom_worker.js') +
+                              (params.get('block') ? '?block=' + params.get('block') : ''));
     worker.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'error') { showError(d.msg); $('status').textContent = 'error: ' + d.msg; }
@@ -180,7 +200,7 @@ async function loadTexturePack(Module) {
   if (params.get('textures') === '0' || settings.hdTextures === false) return;
   const mem = () => Module.wasmMemory.buffer;
   // set before the index arrives: a texture uploaded meanwhile waits (1) and is asked for again
-  Module.flTexQuery = (lo, hi, wp, hp) => {
+  Module.r3dsTexQuery = (lo, hi, wp, hp) => {
     if (!texPack.idx) return 1;
     const k = texKey(lo, hi);
     if (!texPack.idx[k] || texPack.failed.has(k)) return 0;
@@ -190,7 +210,7 @@ async function loadTexturePack(Module) {
     else if (!texPack.busy.has(k)) texDecode(k);
     return 1;
   };
-  Module.flTexCopy = (lo, hi, dst) => {
+  Module.r3dsTexCopy = (lo, hi, dst) => {
     const k = texKey(lo, hi), r = texPack.ready.get(k);
     if (!r) return;
     new Uint8Array(mem()).set(r.data, dst >>> 0);
@@ -477,7 +497,7 @@ function setupSettings() {
   sync();
   // game data: the downloaded copy of the ROM (OPFS rom.bin / rom.meta)
   const romHint = async () => {
-    let t = 'Download (the default) stores the whole game on this device once, about 700 MB to transfer and 890 MB stored, in the background while you play: until it is done the parts not yet here are streamed. Afterwards loading is smooth and the game plays offline. Streaming only reads what the game needs, when it needs it. Changes apply after a reload.';
+    let t = 'Download (the default) stores the whole game on this device once, in the background while you play: until it is done the parts not yet here are streamed. Afterwards loading is smooth and the game plays offline. Streaming only reads what the game needs, when it needs it. Changes apply after a reload.';
     try { const e = await navigator.storage.estimate(); if (e.usage > 64 << 20) t += ` This site stores ${(e.usage / 1048576).toFixed(0)} MB now.`; } catch (e) {}
     $('romHint').textContent = t;
   };
@@ -687,11 +707,21 @@ async function init() {
   if (!ok) return;
   // the text font must be ready before the game's glyph sheets are redrawn with it
   try { await Promise.race([document.fonts.load('700 48px "M PLUS Rounded 1c"', 'AaK'), new Promise((r) => setTimeout(r, 4000))]); } catch (e) {}
-  // the ROM is streamed from the site itself: rom.3ds (the Cloudflare Worker,
-  // or tools/serve_web.py --rom locally). Audio starts on the first click / key.
   let del = false;
   try { del = localStorage.getItem('r3ds-rom-delete') === '1'; localStorage.removeItem('r3ds-rom-delete'); } catch (e) {}
   if (del) await deleteRomCopy();
+  // single-file build: nothing is hosted next to the page, so unless ?rom=
+  // points at a URL the user supplies the file (picker or drag & drop)
+  if (EMBED.mod && !params.get('rom')) {
+    $('loading').textContent = 'This is the standalone build — pick a 3DS ROM to play.';
+    $('romPick').hidden = false;
+    $('romBtn').onclick = () => $('romFile').click();
+    const useFile = (f) => { if (f && !r3ds.started) start({ kind: 'file', file: f }); };
+    $('romFile').onchange = () => useFile($('romFile').files[0]);
+    window.addEventListener('dragover', (e) => { e.preventDefault(); });
+    window.addEventListener('drop', (e) => { e.preventDefault(); useFile(e.dataTransfer.files && e.dataTransfer.files[0]); });
+    return;
+  }
   const url = new URL(params.get('rom') || 'rom.3ds', location.href).href;
   if (settings.romMode === 'download' && !params.get('rom') && navigator.storage && navigator.storage.getDirectory) {
     try { if (navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}   // keep it from being evicted

@@ -22,7 +22,7 @@ if ! command -v emcc >/dev/null 2>&1; then
 fi
 JOBS=${JOBS:-$( (nproc || sysctl -n hw.ncpu) 2>/dev/null || echo 4)}
 mkdir -p build-web && cd build-web
-emcmake cmake .. -DCMAKE_BUILD_TYPE=Release -DFL_WEB_DEBUG=OFF
+emcmake cmake .. -DCMAKE_BUILD_TYPE=Release -DR3DS_WEB_DEBUG=OFF
 emmake make -j"$JOBS"
 echo
 echo "built build-web/ ($(du -h recomp3ds.wasm | cut -f1) wasm)"

@@ -57,11 +57,11 @@ bool hwr_font_detect(const u32 *rgba, u32 w, u32 h, u32 fmt, HwrSheet &out) {
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
 EM_JS(int, js_raster_glyph, (int code, float px, int w, int h, float x, float base, unsigned char *out, int plain), {
-    if (!self.__flGlyph) {
+    if (!self.__glyphCache) {
         const c = new OffscreenCanvas(64, 64);
-        self.__flGlyph = { c, g: c.getContext('2d', { willReadFrequently: true }) };
+        self.__glyphCache = { c, g: c.getContext('2d', { willReadFrequently: true }) };
     }
-    const G = self.__flGlyph;
+    const G = self.__glyphCache;
     if (G.c.width < w || G.c.height < h) { G.c.width = Math.max(G.c.width, w); G.c.height = Math.max(G.c.height, h); G.g = G.c.getContext('2d', { willReadFrequently: true }); }
     const g = G.g;
     g.clearRect(0, 0, w, h);

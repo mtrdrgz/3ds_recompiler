@@ -88,6 +88,11 @@
 
   <section class="panel" id="setup">
     <p id="loading">Loading the game…</p>
+    <div class="row" id="romPick" hidden>
+      <input type="file" id="romFile" accept=".3ds,.cci,.cxi,.bin" hidden>
+      <button id="romBtn">Choose a 3DS ROM…</button>
+      <span class="dim">or drop a .3ds/.cxi file anywhere on this page</span>
+    </div>
     <div class="err" id="err"></div>
     <p class="dim" id="env"></p>
   </section>

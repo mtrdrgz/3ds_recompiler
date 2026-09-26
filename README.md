@@ -144,12 +144,35 @@ URL parameters: `?rom=<url>`, `&autostart=1`, `&env=NAME=VALUE` (repeatable),
 `?layout=`, `?filter=`, `?aspect=`, `?bottomMode=`, `?renderer=`, `?res=`,
 `?extdata=<id>` (save import target, see §6).
 
+### 4.1 Single-file build (`recomp3ds.html`)
+
+```bash
+# build an interpreter-only wasm (no lifted code) and bundle everything into
+# one HTML file: runtime, page, workers, worklet, icon
+emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release -DR3DS_LIFTED=OFF
+emmake make -C build-web -j
+python3 tools/bundle_html.py            # -> build-web/recomp3ds.html
+```
+
+The file is a self-contained player: open it and pick (or drop) a decrypted
+`.3ds`/`.cxi` — ROM parsing, exheader handling and code decompression all
+happen inside the wasm runtime, and the built-in ARM interpreter executes the
+game. It still needs cross-origin isolation, so it must be **served** (any
+host sending COOP/COEP — `serve_web.py` included); `file://` can never provide
+`SharedArrayBuffer` and the page will say so.
+
+Because it contains **no lifted code, it contains no bytes derived from any
+game** — this file is safe to publish (and is the build attached to GitHub
+Releases). The tradeoff is speed: interpretation is much slower than lifted
+code. For full speed on one game use `tools/build_web.sh <rom>` instead — but
+that output embeds code generated from your ROM, so keep it private.
+
 **Download-all mode** (`?romMode=download`, the default):
 `tools/pack_rom.py` splits the ROM into independent 8 MiB brotli streams served
 as `/rompack/<i>`; the page inflates them natively into OPFS and streams the
 rest on demand until the copy is complete. It resumes after an interruption.
 
-### 4.1 Hosting (privately)
+### 4.2 Hosting (privately)
 
 `deploy/` holds a Cloudflare Worker (`src/worker.js`) that serves the site and
 the ROM pack out of a private Hugging Face dataset behind an access cookie.
@@ -158,7 +181,7 @@ your route) and `wrangler secret put HF_TOKEN` / `ACCESS_KEY`. A Durable
 Object (`MultiplayerRoom`) relays `/multiplayer` websocket rooms — see
 `rt/multiplayer.cpp`.
 
-### 4.2 Browser requirements
+### 4.3 Browser requirements
 
 WebAssembly threads + SIMD and ideally 4+ cores (the runtime uses about a
 dozen threads). The guest address space is a 512 MB block; actual memory use

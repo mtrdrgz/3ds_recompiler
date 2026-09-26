@@ -5,7 +5,7 @@
 // texture's own texel space (textureDimensions), so any size works.
 //
 //   web:    the page's texture pack (textures.json + textures.pack, WebP or
-//           PNG images), decoded by the browser (web/app.js, Module.flTex*)
+//           PNG images), decoded by the browser (web/app.js, Module.r3dsTex*)
 //   native: R3DS_TEX_DIR=dir of <hash>_<W>x<H>.rgba files (top row first),
 //           written by texlab.py for trying replacements without packing
 #include "hwr.h"
@@ -19,11 +19,11 @@
 #include <emscripten.h>
 
 EM_JS(int, r3ds_tex_query, (u32 lo, u32 hi, u32 *w, u32 *h), {
-    if (!Module.flTexQuery) return 0;
-    return Module.flTexQuery(lo >>> 0, hi >>> 0, w, h);
+    if (!Module.r3dsTexQuery) return 0;
+    return Module.r3dsTexQuery(lo >>> 0, hi >>> 0, w, h);
 });
 EM_JS(void, r3ds_tex_copy, (u32 lo, u32 hi, u32 *dst), {
-    if (Module.flTexCopy) Module.flTexCopy(lo >>> 0, hi >>> 0, dst);
+    if (Module.r3dsTexCopy) Module.r3dsTexCopy(lo >>> 0, hi >>> 0, dst);
 });
 
 int hwr_texrepl_query(u64 hash, u32 *w, u32 *h) { return r3ds_tex_query((u32)hash, (u32)(hash >> 32), w, h); }
