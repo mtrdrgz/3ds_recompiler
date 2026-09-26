@@ -88,7 +88,7 @@ struct Y2rService : Service {
         case 0x0D: Y.end_irq = a1 & 1; ipc.reply(1, 0); break;
         case 0x0E: get(Y.end_irq); break;
         case 0x0F:
-            if (!Y.end_ev) Y.end_ev = std::make_shared<Event>(0);
+            if (!Y.end_ev) { Y.end_ev = std::make_shared<Event>(0); Y.end_ev->name = "y2r end"; }
             ipc.reply(1, 2); ipc.w(2, 0); ipc.w(3, g_k.new_handle(Y.end_ev)); break;
         case 0x10: setbuf(Y.y); break;
         case 0x11: setbuf(Y.u); break;

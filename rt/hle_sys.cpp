@@ -103,7 +103,7 @@ struct HidService : Service {
         case 0x000A: {  // GetIPCHandles
             if (!g_hid_shm) {
                 g_hid_shm = shm_create(0x2B0, "hid shm");
-                for (auto &e : g_hid_ev) e = std::make_shared<Event>(0);
+                for (int i = 0; i < 5; i++) { g_hid_ev[i] = std::make_shared<Event>(0); g_hid_ev[i]->name = "hid ev" + std::to_string(i); }
                 g_k.add_periodic(16666667, hid_update);
             }
             ipc.reply(1, 7); ipc.w(2, 0x14000000);
@@ -222,7 +222,7 @@ struct DspService : Service {
             break;
         }
         case 0x0016: {
-            if (!g_dsp_sem_ev) g_dsp_sem_ev = std::make_shared<Event>(0);
+            if (!g_dsp_sem_ev) { g_dsp_sem_ev = std::make_shared<Event>(0); g_dsp_sem_ev->name = "dsp sema"; }
             ipc.reply(1, 2); ipc.w(2, 0); ipc.w(3, g_k.new_handle(g_dsp_sem_ev)); break;
         }
         case 0x0017: ipc.reply(1, 0); break;
@@ -248,7 +248,7 @@ struct CecdService : Service {
             ipc.reply(2, 0); ipc.w(2, 2); break;        // CEC_STATE_ABBREV_INACTIVE
         case 0x000F: case 0x0010: {                     // GetCecInfoEventHandle / GetChangeStateEventHandle
             auto &e = ipc.cmd() == 0x000F ? info_ev : state_ev;
-            if (!e) e = std::make_shared<Event>(1);
+            if (!e) { e = std::make_shared<Event>(1); e->name = ipc.cmd() == 0x000F ? "cecd info" : "cecd state"; }
             ipc.reply(1, 2); ipc.w(2, 0x04000000); ipc.w(3, g_k.new_handle(e));
             break;
         }
@@ -301,7 +301,7 @@ struct FrdService : Service {
         case 0x0001: ipc.reply(2, 0); ipc.w(2, logged_in); break;             // HasLoggedIn
         case 0x0002: ipc.reply(2, 0); ipc.w(2, 0); break;                     // IsOnline
         case 0x0003: logged_in = true;                                        // Login(desc, event)
-            if (auto e = g_k.get_as<Event>(ipc.p(2), KType::Event)) notif_ev = e;
+            if (auto e = g_k.get_as<Event>(ipc.p(2), KType::Event)) { notif_ev = e; e->name = "frd notif"; }
             ipc.reply(1, 0); break;
         case 0x0004: logged_in = false; ipc.reply(1, 0); break;               // Logout
         case 0x0005: {  // GetMyFriendKey {principal_id, pad, local_friend_code}
@@ -333,10 +333,47 @@ struct FrdService : Service {
             ipc.reply(18, 0);
             for (int i = 2; i <= 18; i++) ipc.w(i, 0); break;
         }
+        case 0x0011: {  // GetFriendKeyList(offset, count) -> keys in static buf 0; empty list
+            u32 dst = ipc.static_buf_addr(0);
+            ipc.reply(2, 2); ipc.w(2, 0); ipc.static_desc(3, 0, 0, dst);
+            break;
+        }
+        case 0x0012: {  // GetFriendPresence(count, desc0, keybuf): 0x30B placeholder entries (found=0) in static buf 0
+            u32 dst = ipc.static_buf_addr(0);
+            u32 n = dst ? std::min<u32>(ipc.p(1), ipc.static_buf_size(0) / 0x30) : 0;
+            if (n) memset(gp(dst), 0, n * 0x30);
+            ipc.reply(1, 2); ipc.static_desc(2, 0, n * 0x30, dst);
+            break;
+        }
+        case 0x0013: {  // GetFriendScreenName(count...): names in static buf 0, charsets in buf 1; empty placeholders
+            u32 n = ipc.p(3);
+            u32 a0 = ipc.static_buf_addr(0), a1 = ipc.static_buf_addr(1);
+            u32 nb = a0 ? std::min<u32>(n * 0x16, ipc.static_buf_size(0)) : 0;
+            u32 cb = a1 ? std::min<u32>(n, ipc.static_buf_size(1)) : 0;
+            if (nb) memset(gp(a0), 0, nb);
+            if (cb) memset(gp(a1), 0, cb);
+            ipc.reply(1, 4);
+            ipc.static_desc(2, 0, nb, a0);
+            ipc.static_desc(4, 1, cb, a1);
+            break;
+        }
+        case 0x0014: {  // GetFriendMii(count, desc0, keybuf, descW, outbuf): zeroed placeholder MiiData
+            u32 out = ipc.p(5), n = out ? std::min<u32>(ipc.p(1) * 0x60, ipc.p(4) >> 4) : 0;
+            if (n) memset(gp(out), 0, n);
+            ipc.reply(1, 2); ipc.w(2, ipc.p(4)); ipc.w(3, out);
+            break;
+        }
+        case 0x0015: case 0x0016: case 0x0017: case 0x0018: case 0x0019:
+        case 0x001A: case 0x001C: {  // GetFriendProfile/Relationship/AttributeFlags/PlayingGame/FavoriteGame/Info/UnscrambleLocalFriendCode
+            u32 dst = ipc.static_buf_addr(0), sz = ipc.static_buf_size(0);   // zeroed placeholder entries
+            if (dst && sz) memset(gp(dst), 0, sz);
+            ipc.reply(1, 2); ipc.static_desc(2, 0, sz, dst);
+            break;
+        }
         case 0x001B: ipc.reply(2, 0); ipc.w(2, 0); break;                     // IsIncludedInFriendList
         case 0x001D: case 0x001E: ipc.reply(1, 0); break;                     // UpdateGameModeDescription / UpdateMyPresence
         case 0x0020:                                                        // AttachToEventNotification(desc, event)
-            if (auto e = g_k.get_as<Event>(ipc.p(2), KType::Event)) notif_ev = e;
+            if (auto e = g_k.get_as<Event>(ipc.p(2), KType::Event)) { notif_ev = e; e->name = "frd notif"; }
             ipc.reply(1, 0); break;
         case 0x0021: ipc.reply(1, 0); break;                                  // SetNotificationMask
         case 0x0023: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetLastResponseResult
@@ -367,6 +404,7 @@ struct BossService : Service {
         case 0x0007: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetNewArrivalFlag
         case 0x0008: {  // RegisterNewArrivalEvent(desc, event): client hands us the event
             arrival_ev = g_k.get_as<Event>(ipc.p(2), KType::Event);
+            if (arrival_ev) arrival_ev->name = "boss arrival";
             ipc.reply(1, 0, arrival_ev ? RES_OK : RES_INVALID_HANDLE); break;
         }
         case 0x0009: ipc.reply(1, 0); break;                                  // SetOptoutFlag

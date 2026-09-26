@@ -212,6 +212,22 @@ void Kernel::maybe_preempt(std::unique_lock<std::mutex> &lk) {
     }
 }
 
+// Round-robin between threads of equal priority, from the ~1 ms kernel_poll
+// tick only (SVC paths keep strict higher-priority preemption). Hardware
+// time-slices equals on a core, and threads pinned to different cores truly
+// run in parallel; without this a guest that spin-polls a flag never lets a
+// same-or-lower-priority producer run.
+void Kernel::timeslice(std::unique_lock<std::mutex> &lk) {
+    Thread *self = current;
+    for (Thread *t : ready) {
+        if (t->prio <= self->prio) {
+            make_ready(self);
+            switch_away(lk, self);
+            return;
+        }
+    }
+}
+
 static void thread_host_main(Thread *t) {
     {
         std::unique_lock<std::mutex> lk(g_k.mtx);
@@ -328,6 +344,7 @@ void kernel_poll(Cpu &c) {
     g_irq_pending = 0;
     g_k.process_time(now_ns());
     g_k.maybe_preempt(lk);
+    g_k.timeslice(lk);
 }
 
 void interp_kick();
@@ -684,15 +701,20 @@ static const char *tstate(TState s) {
     switch (s) { case TState::Ready: return "ready"; case TState::Running: return "RUN"; case TState::WaitSync: return "waitsync";
     case TState::WaitSleep: return "sleep"; case TState::WaitArb: return "waitarb"; case TState::WaitIpc: return "waitipc"; default: return "dead"; }
 }
-void kernel_dump_threads() {
-    std::unique_lock<std::mutex> lk(g_k.mtx, std::try_to_lock);
+static const char *ktype_name(KType t) {
+    static const char *n[] = {"thread", "event", "mutex", "sema", "timer", "arbiter", "shmem", "session", "port", "process", "reslimit", "dummy"};
+    return n[(int)t <= 11 ? (int)t : 11];
+}
+// g_k.mtx held by the caller (e.g. inside process_time/switch_away/SVC paths).
+void kernel_thread_dump_locked() {
     extern u32 display_frame_count();
     fprintf(stderr, "[status] frames=%u mem_used=%llx\n", display_frame_count(), (unsigned long long)g_mem_used);
     for (auto &t : g_k.threads) {
         fprintf(stderr, "  t%u prio=%d %-8s pc=%08x lr=%08x sp=%08x", t->id, t->prio, tstate(t->state), t->cpu.r[15], t->cpu.r[14], t->cpu.r[13]);
         if (t->state == TState::WaitSync) {
-            fprintf(stderr, " objs:");
-            for (auto &o : t->wait_objs) fprintf(stderr, " %d", (int)o->type);
+            fprintf(stderr, " waits:");
+            for (auto &o : t->wait_objs)
+                fprintf(stderr, " %s%s%s", ktype_name(o->type), o->name.empty() ? "" : ":", o->name.c_str());
         }
         if (t->state == TState::WaitArb) fprintf(stderr, " arb=%08x val=%08x", t->arb_addr, rd32(t->arb_addr));
         fprintf(stderr, "\n");
@@ -707,6 +729,10 @@ void kernel_dump_threads() {
             size_t q = s.find(',', p); if (q == std::string::npos) break; p = q + 1;
         }
     }
+}
+void kernel_dump_threads() {
+    std::unique_lock<std::mutex> lk(g_k.mtx, std::try_to_lock);
+    if (lk.owns_lock()) kernel_thread_dump_locked();
 }
 
 u32 thread_id_of(Thread *t) { return t ? t->id : 0; }

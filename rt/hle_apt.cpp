@@ -24,8 +24,8 @@ struct AptService : Service {
             ipc.reply(3, 2); ipc.w(2, 0); ipc.w(3, 0); ipc.w(4, 0x04000000); ipc.w(5, g_k.new_handle(g_apt_lock));
             break;
         case 0x0002:  // Initialize(appid, attr)
-            if (!g_apt_notif) g_apt_notif = std::make_shared<Event>(0);
-            if (!g_apt_param) g_apt_param = std::make_shared<Event>(0);
+            if (!g_apt_notif) { g_apt_notif = std::make_shared<Event>(0); g_apt_notif->name = "apt notif"; }
+            if (!g_apt_param) { g_apt_param = std::make_shared<Event>(0); g_apt_param->name = "apt param"; }
             ipc.reply(1, 3); ipc.w(2, 0x04000000);
             ipc.w(3, g_k.new_handle(g_apt_notif)); ipc.w(4, g_k.new_handle(g_apt_param));
             break;

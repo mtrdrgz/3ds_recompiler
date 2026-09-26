@@ -2,9 +2,12 @@
 // single-core priority scheduler and the SVC table.
 //
 // Every guest thread is a host thread, but exactly one of them runs guest
-// code at a time (the one in `g_k.current`). Switches happen only inside
-// SVCs, which matches the app core: no time-slicing, preemption only when a
-// higher-priority thread becomes ready.
+// code at a time (the one in `g_k.current`). Switches happen inside SVCs
+// and on the ~1 ms kernel_poll tick: a strictly higher-priority thread
+// preempts immediately, and equal-priority threads round-robin on the tick
+// (the real kernel time-slices them, and without it a spin-polling thread
+// starves same-priority workers that on hardware would run on the other
+// core).
 #pragma once
 #include "cpu.h"
 #include <memory>
@@ -146,6 +149,7 @@ struct Kernel {
     void block_current(std::unique_lock<std::mutex> &lk);   // current has set its wait state
     void yield_current(std::unique_lock<std::mutex> &lk);
     void maybe_preempt(std::unique_lock<std::mutex> &lk);
+    void timeslice(std::unique_lock<std::mutex> &lk);       // RR among equal priorities on the poll tick
     void switch_away(std::unique_lock<std::mutex> &lk, Thread *self);
     void wake_thread(Thread *t, Result res, s32 index);
     void process_time(u64 now);

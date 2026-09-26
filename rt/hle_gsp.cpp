@@ -92,6 +92,20 @@ static void vblank() {
         INFO("[gsp] vblank %u: top fb=%08x fmt=%u stride=%u valid=%d | bot fb=%08x fmt=%u | draws=%llu frags=%llu",
              n, g_fb[0].addr_va, g_fb[0].format, g_fb[0].stride, g_fb[0].valid, g_fb[1].addr_va, g_fb[1].format,
              (unsigned long long)g_pica->draws, (unsigned long long)g_frag_count);
+    // A live game submits GPU draws almost every frame; ~10 s without any is
+    // a stuck game (deadlock or starvation). Dump where every thread sleeps —
+    // the wait-object names say which service event each is parked on.
+    {
+        static u64 last_draws = 0;
+        static int stall_vb = 0;
+        if (g_pica->draws != last_draws) { last_draws = g_pica->draws; stall_vb = 0; }
+        else if (++stall_vb == 600) {
+            extern void kernel_thread_dump_locked();
+            LOG("[gsp] no GPU draws for 10 s — guest is likely stuck; thread states:");
+            kernel_thread_dump_locked();
+            stall_vb = 0;
+        }
+    }
     // What the screens show at this vblank is what the GPU work submitted
     // before it produced. With the GPU on its own thread that is known only
     // when the thread gets here in its queue, so the frame is captured there
@@ -394,6 +408,7 @@ struct GspService : Service {
             break;
         case 0x0013: {  // RegisterInterruptRelayQueue(flags, desc, event)
             g_gsp_ev = g_k.get_as<Event>(ipc.p(3), KType::Event);
+            if (g_gsp_ev) g_gsp_ev->name = "gsp irq";
             if (!g_gsp_shm) {
                 g_gsp_shm = shm_create(0x1000, "gsp shm");
                 // 60.00 Hz rather than the LCD's 59.83: frames then line up

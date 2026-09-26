@@ -73,7 +73,7 @@ struct SrvService : Service {
         case 0x0001:  // RegisterClient
             ipc.reply(1, 0); break;
         case 0x0002: {  // EnableNotification
-            if (!notif) notif = std::make_shared<Event>(0);
+            if (!notif) { notif = std::make_shared<Event>(0); notif->name = "srv notif"; }
             ipc.reply(1, 2); ipc.w(2, 0x04000000); ipc.w(3, g_k.new_handle(notif)); break;
         }
         case 0x0005: {  // GetServiceHandle(name[8], len, flags)
