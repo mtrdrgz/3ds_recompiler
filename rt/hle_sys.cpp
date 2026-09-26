@@ -233,12 +233,169 @@ struct DspService : Service {
     }
 };
 
+// ------------------------------------------------------------------ cecd
+// StreetPass. No CEC system module runs, so no hits ever arrive: the two
+// events are real (games WaitSync on them) but simply stay unsignaled.
+struct CecdService : Service {
+    std::shared_ptr<Event> info_ev, state_ev;
+    CecdService() : Service("cecd:u") {}
+    void handle(Ipc &ipc) override {
+        switch (ipc.cmd()) {
+        case 0x0001: case 0x0005: case 0x0008:          // OpenRawFile / WriteRawFile / Delete
+        case 0x000B: case 0x000C:                       // Start / Stop
+            ipc.reply(1, 0); break;
+        case 0x000E:                                    // GetCecdState
+            ipc.reply(2, 0); ipc.w(2, 2); break;        // CEC_STATE_ABBREV_INACTIVE
+        case 0x000F: case 0x0010: {                     // GetCecInfoEventHandle / GetChangeStateEventHandle
+            auto &e = ipc.cmd() == 0x000F ? info_ev : state_ev;
+            if (!e) e = std::make_shared<Event>(1);
+            ipc.reply(1, 2); ipc.w(2, 0x04000000); ipc.w(3, g_k.new_handle(e));
+            break;
+        }
+        default: unknown(ipc);
+        }
+    }
+};
+
+// ------------------------------------------------------------------ ndm
+// Network daemon manager: there are no daemons — commands are accepted and
+// state queries describe an offline console.
+struct NdmService : Service {
+    u32 excl = 0, suspended = 0, defaults = 0xF;
+    NdmService() : Service("ndm:u") {}
+    void handle(Ipc &ipc) override {
+        switch (ipc.cmd()) {
+        case 0x0001: excl = ipc.p(1); ipc.reply(1, 0); break;                 // EnterExclusiveState
+        case 0x0002: excl = 0; ipc.reply(1, 0); break;                        // LeaveExclusiveState
+        case 0x0003: ipc.reply(2, 0); ipc.w(2, excl); break;                  // QueryExclusiveMode
+        case 0x0004: case 0x0005: ipc.reply(1, 0); break;                     // LockState / UnlockState
+        case 0x0006: suspended |= ipc.p(1); ipc.reply(1, 0); break;           // SuspendDaemons(mask)
+        case 0x0007: suspended &= ~ipc.p(1); ipc.reply(1, 0); break;          // ResumeDaemons(mask)
+        case 0x0008: case 0x0009: ipc.reply(1, 0); break;                     // SuspendScheduler / ResumeScheduler
+        case 0x000A: case 0x000B: ipc.reply(2, 0); ipc.w(2, 0); break;        // GetCurrentState / GetTargetState: STATE_INITIAL
+        case 0x000D: {  // QueryStatus(daemon) -> DaemonStatus
+            u32 d = ipc.p(1);
+            ipc.reply(2, 0); ipc.w(2, (suspended & (1u << (d & 7))) ? 3u : 1u); break;
+        }
+        case 0x000E: case 0x000F: ipc.reply(2, 0); ipc.w(2, 0); break;        // daemon/scheduler disable counts
+        case 0x0010: case 0x0012: ipc.reply(1, 0); break;                     // SetScanInterval / SetRetryInterval
+        case 0x0011: case 0x0013: ipc.reply(2, 0); ipc.w(2, 0); break;        // GetScanInterval / GetRetryInterval
+        case 0x0014: defaults = ipc.p(1); ipc.reply(1, 0); break;             // OverrideDefaultDaemons
+        case 0x0015: defaults = 0xF; ipc.reply(1, 0); break;                  // ResetDefaultDaemons
+        case 0x0016: ipc.reply(2, 0); ipc.w(2, defaults); break;              // GetDefaultDaemons
+        case 0x0017: ipc.reply(1, 0); break;                                  // ClearHalfAwakeMacFilter
+        default: unknown(ipc);
+        }
+    }
+};
+
+// ------------------------------------------------------------------ frd
+// Friends: an offline console — never logged in, empty friend list, no
+// notifications. Event handles the client passes are real but never signaled.
+struct FrdService : Service {
+    std::shared_ptr<Event> notif_ev;
+    bool logged_in = false;
+    FrdService() : Service("frd:u") {}
+    void handle(Ipc &ipc) override {
+        switch (ipc.cmd()) {
+        case 0x0001: ipc.reply(2, 0); ipc.w(2, logged_in); break;             // HasLoggedIn
+        case 0x0002: ipc.reply(2, 0); ipc.w(2, 0); break;                     // IsOnline
+        case 0x0003: logged_in = true;                                        // Login(desc, event)
+            if (auto e = g_k.get_as<Event>(ipc.p(2), KType::Event)) notif_ev = e;
+            ipc.reply(1, 0); break;
+        case 0x0004: logged_in = false; ipc.reply(1, 0); break;               // Logout
+        case 0x0005: {  // GetMyFriendKey {principal_id, pad, local_friend_code}
+            ipc.reply(5, 0);
+            for (int i = 2; i <= 5; i++) ipc.w(i, 0); break;
+        }
+        case 0x0006: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetMyPreference
+        case 0x0007: {  // GetMyProfile: FriendProfile 0x14 bytes
+            ipc.reply(6, 0);
+            for (int i = 2; i <= 6; i++) ipc.w(i, 0); break;
+        }
+        case 0x0008: {  // GetMyPresence: FriendPresence 0x1C bytes
+            ipc.reply(8, 0);
+            for (int i = 2; i <= 8; i++) ipc.w(i, 0); break;
+        }
+        case 0x0009: {  // GetMyScreenName: u16[11], empty
+            ipc.reply(7, 0);
+            for (int i = 2; i <= 7; i++) ipc.w(i, 0); break;
+        }
+        case 0x000A: {  // GetMyMii: zeroed mii data
+            ipc.reply(24, 0);
+            for (int i = 2; i <= 24; i++) ipc.w(i, 0); break;
+        }
+        case 0x000B: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetMyLocalAccountId
+        case 0x000C: case 0x000D:                                             // GetMyPlayingGame / GetMyFavoriteGame (u64)
+            ipc.reply(3, 0); ipc.w(2, 0); ipc.w(3, 0); break;
+        case 0x000E: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetMyNcPrincipalId
+        case 0x000F: {  // GetMyComment: u16[33], empty
+            ipc.reply(18, 0);
+            for (int i = 2; i <= 18; i++) ipc.w(i, 0); break;
+        }
+        case 0x001B: ipc.reply(2, 0); ipc.w(2, 0); break;                     // IsIncludedInFriendList
+        case 0x001D: case 0x001E: ipc.reply(1, 0); break;                     // UpdateGameModeDescription / UpdateMyPresence
+        case 0x0020:                                                        // AttachToEventNotification(desc, event)
+            if (auto e = g_k.get_as<Event>(ipc.p(2), KType::Event)) notif_ev = e;
+            ipc.reply(1, 0); break;
+        case 0x0021: ipc.reply(1, 0); break;                                  // SetNotificationMask
+        case 0x0023: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetLastResponseResult
+        case 0x0025: ipc.reply(2, 0); ipc.w(2, 0); break;                     // FriendCodeToPrincipalId
+        case 0x0026: ipc.reply(2, 0); ipc.w(2, 0); break;                     // IsValidFriendCode
+        case 0x0027: ipc.reply(2, 0); ipc.w(2, 0); break;                     // ResultToErrorCode
+        case 0x002D: ipc.reply(3, 0); ipc.w(2, 0); ipc.w(3, 0); break;        // GetNatProperties
+        case 0x002E: ipc.reply(3, 0); ipc.w(2, 0); ipc.w(3, 0); break;        // GetServerTimeDifference
+        case 0x002F: ipc.reply(1, 0); break;                                  // AllowHalfAwake
+        case 0x0030: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetServerTypes
+        case 0x0032: ipc.reply(1, 0); break;                                  // SetClientSdkVersion
+        default: unknown(ipc);
+        }
+    }
+};
+
+// ------------------------------------------------------------------ boss
+// SpotPass: the session opens, no storage is configured and no tasks ever
+// run — an arrival event the client registers is real but never signaled.
+struct BossService : Service {
+    std::shared_ptr<Event> arrival_ev;
+    BossService() : Service("boss:U") {}
+    void handle(Ipc &ipc) override {
+        switch (ipc.cmd()) {
+        case 0x0001: ipc.reply(1, 0); break;                                  // InitializeSession(u64 programID)
+        case 0x0002: case 0x0003: ipc.reply(1, 0); break;                     // SetStorageInfo / UnregisterStorage
+        case 0x0005: case 0x0006: ipc.reply(1, 0); break;                     // RegisterPrivateRootCa / ClientCert
+        case 0x0007: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetNewArrivalFlag
+        case 0x0008: {  // RegisterNewArrivalEvent(desc, event): client hands us the event
+            arrival_ev = g_k.get_as<Event>(ipc.p(2), KType::Event);
+            ipc.reply(1, 0, arrival_ev ? RES_OK : RES_INVALID_HANDLE); break;
+        }
+        case 0x0009: ipc.reply(1, 0); break;                                  // SetOptoutFlag
+        case 0x000A: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetOptoutFlag
+        case 0x000E: ipc.reply(2, 0); ipc.w(2, 0); break;                     // GetTaskIdList -> empty
+        default: unknown(ipc);
+        }
+    }
+};
+
 // ------------------------------------------------------------------ misc
 struct ErrF : Service {
     ErrF() : Service("err:f") {}
     void handle(Ipc &ipc) override {
-        LOG("[err:f] ThrowFatalError type=%u result=%08x pc=%08x", ipc.p(1) & 0xFF, ipc.p(2), ipc.p(3));
-        ipc.reply(1, 0);
+        switch (ipc.cmd()) {
+        case 0x0001:  // Throw(ERRF_FatalErrInfo): the game is dead from here on
+            LOG("[err:f] fatal error: type=%u result=%08x pc=%08x proc=%08x",
+                ipc.p(1) & 0xFF, ipc.p(2), ipc.p(3), ipc.p(4));
+            fatal("guest fatal error");
+        case 0x0002: {  // SetUserString(size, desc, ptr)
+            u32 s = ipc.p(3), n = std::min<u32>(ipc.p(1), 64);
+            std::string txt;
+            for (u32 i = 0; i < n && mem_is_mapped(s + i); i++) { char c = (char)rd8(s + i); if (!c) break; txt += c; }
+            LOG("[err:f] user string '%s'", txt.c_str());
+            ipc.reply(1, 0);
+            break;
+        }
+        default: unknown(ipc);
+        }
     }
 };
 
@@ -268,8 +425,12 @@ void services_register_all() {
     services_register("ptm:u", [] { return std::make_shared<PtmService>("ptm:u"); });
     services_register("dsp::DSP", [] { return std::make_shared<DspService>(); });
     services_register("err:f", [] { return std::make_shared<ErrF>(); });
-    const char *stubs[] = {"ac:u", "boss:U", "cam:u", "cecd:u", "dlp:FKCL", "dlp:SRVR", "frd:u", "http:C", "mic:u",
-                           "ndm:u", "news:u", "nwm::UDS", "soc:U", "ssl:C", "ldr:ro", "ir:USER", "nim:aoc",
+    services_register("cecd:u", [] { return std::make_shared<CecdService>(); });
+    services_register("ndm:u", [] { return std::make_shared<NdmService>(); });
+    services_register("frd:u", [] { return std::make_shared<FrdService>(); });
+    services_register("boss:U", [] { return std::make_shared<BossService>(); });
+    const char *stubs[] = {"ac:u", "cam:u", "dlp:FKCL", "dlp:SRVR", "http:C", "mic:u",
+                           "news:u", "nwm::UDS", "soc:U", "ssl:C", "ldr:ro", "ir:USER", "nim:aoc",
                            "am:app", "pxi:dev"};
     for (const char *s : stubs) {
         std::string n = s;

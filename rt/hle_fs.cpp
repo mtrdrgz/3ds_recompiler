@@ -169,6 +169,7 @@ struct FsService : Service {
     FsService(std::string n) : Service(n) {}
     void handle(Ipc &ipc) override {
         switch (ipc.cmd()) {
+        case 0x0801: ipc.reply(1, 0); break;  // Initialize(desc, program info buf): nothing to retain
         case 0x0802: {  // OpenFile(trans, arch64, ptype, psize, flags, attr, desc, ptr)
             u64 ah = ipc.p(2) | ((u64)ipc.p(3) << 32);
             auto it = g_archives.find(ah);
