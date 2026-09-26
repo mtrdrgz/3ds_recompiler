@@ -133,10 +133,12 @@ static Result open_archive(u32 id, u32 ptype, u32 pptr, u32 psize, u64 &out) {
             INFO("[fs] savedata not formatted yet");
             return 0xC8A04554;
         }
-        if ((id == 6 || id == 7) && !fsys::exists(a.root)) {
-            INFO("[fs] extdata %s not found", a.root.c_str());
-            return 0xC8A04478;
-        }
+        // extdata / shared extdata: a real console ships the OS-owned archives
+        // already created, and games also open their own before creating it —
+        // provision an empty archive either way. If the game needed actual
+        // content, the file-open failure deeper down names what's missing.
+        if ((id == 6 || id == 7) && !fsys::exists(a.root))
+            INFO("[fs] extdata %s missing — auto-creating it empty", a.root.c_str());
         fsys::create_directories(a.root);
     }
     out = g_arch_next++;
