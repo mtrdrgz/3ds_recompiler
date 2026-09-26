@@ -42,6 +42,32 @@ for (const el of document.querySelectorAll('script[data-r3ds]')) EMBED[el.datase
 const embBytes = (k) => EMBED[k] ? Uint8Array.from(atob(EMBED[k]), (c) => c.charCodeAt(0)) : null;
 const embURL = (k, type) => { const b = embBytes(k); return b ? URL.createObjectURL(new Blob([b], { type })) : null; };
 
+// ---- ROM sanity check for picked files: the same magics rt/rom.cpp checks,
+// run here so a bad file fails with a readable error instead of a black canvas
+async function checkRomFile(f) {
+  const rd = async (o, n) => new Uint8Array(await f.slice(o, Math.min(o + n, f.size)).arrayBuffer());
+  const isMagic = (b, s) => b.length >= 4 && String.fromCharCode(b[0], b[1], b[2], b[3]) === s;
+  const err = (msg) => ({ ok: false, msg });
+  if (f.size < 0x400) return err('too small to be a 3DS image');
+  const h = await rd(0, 0x200);
+  const u32 = (b, o) => b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24;
+  let ncchOff = 0;
+  if (isMagic(h.subarray(0x100), 'NCSD')) {
+    ncchOff = u32(h, 0x120) * 0x200;   // partition 0 offset, in media units
+    if (!ncchOff || ncchOff >= f.size) return err('NCSD partition table looks wrong');
+  } else if (isMagic(h.subarray(0x100), 'NCCH')) {
+    ncchOff = 0;                       // bare CXI
+  } else if (h[0] === 0x20 && h[1] === 0x20) {
+    return err("this is a .cia install archive — installable apps aren't supported; use a .3ds/.cci cartridge image or a .cxi");
+  } else return err('no NCSD/NCCH magic — not a .3ds/.cci/.cxi image (or badly damaged)');
+  const ncch = await rd(ncchOff, 0x200);
+  if (!isMagic(ncch.subarray(0x100), 'NCCH')) return err('no NCCH header at partition 0 — not a normal cartridge image');
+  if (!(ncch[0x18F] & 0x04))
+    return err('this ROM is still encrypted — decrypt it first (GodMode9: "Decrypt file…"), or use an already-decrypted .3ds/.cxi');
+  const product = new TextDecoder('ascii').decode(ncch.subarray(0x150, 0x160)).replace(/\0.*$/, '').trim();
+  return { ok: true, product };
+}
+
 // a short note over the status bar (quick keys)
 let flashTimer = 0;
 function flash(msg) {
@@ -50,7 +76,14 @@ function flash(msg) {
   flashTimer = setTimeout(() => { r3ds.flash = ''; updateHud(); }, 1500);
   updateHud();
 }
-function showError(msg) { $('err').textContent = msg; r3ds.errors.push(msg); logLine('[error] ' + msg); }
+function showError(msg) {
+  $('err').textContent = msg; r3ds.errors.push(msg); logLine('[error] ' + msg);
+  // while playing, the setup panel is hidden — surface failures in the bar
+  // and open the log, where the [rom]/[boot]/[ipc] lines say what happened
+  if (r3ds.started) { $('log').style.display = 'block'; if ($('status')) $('status').textContent = 'error: ' + String(msg).split('\n')[0]; }
+}
+window.addEventListener('unhandledrejection', (e) => showError('unhandled runtime error: ' + (e.reason && e.reason.message || e.reason)));
+window.addEventListener('error', (e) => { if (r3ds.started && e.message) showError('runtime error: ' + e.message); });
 const logBuf = [];
 function logLine(s) {
   logBuf.push(s); if (logBuf.length > 400) logBuf.shift();
@@ -134,8 +167,10 @@ async function start(source) {
     const Module = await window.createR3DS({
       ...(wasmURL ? { locateFile: (p) => p.endsWith('.wasm') ? wasmURL : p } : {}),
       ...(wasmBytes ? { wasmBinary: wasmBytes.buffer } : {}),
+      onAbort: (w) => showError('guest runtime aborted' + (w ? ': ' + w : '') + ' — see the log'),
+      onExit: (c) => { if (c) showError('guest exited with code ' + c + ' — see the log'); },
       print: (s) => logLine(s),
-      printErr: (s) => logLine(s),
+      printErr: (s) => { logLine(s); if (/^\[fatal\]|^abort\(|wasm exception/i.test(s)) showError(s); },
       preRun: [(M) => {
         for (const k in env) M.ENV[k] = env[k];
         M.FS.mkdir('/save');
@@ -155,7 +190,8 @@ async function start(source) {
     worker.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'error') { showError(d.msg); $('status').textContent = 'error: ' + d.msg; }
-      else if (d.type === 'ready') { r3ds.romLocal = !!(r3ds.dl && !r3ds.dl.failed); logLine(`[web] ROM ready (${(d.size / 1048576).toFixed(0)} MiB, ${r3ds.romLocal ? 'downloaded copy' : 'streamed'})`); }
+      else if (d.type === 'ready') { r3ds.romLocal = source.kind === 'file' || !!(r3ds.dl && !r3ds.dl.failed);
+        logLine(`[web] ROM ready (${(d.size / 1048576).toFixed(0)} MiB, ${source.kind === 'file' ? 'local file' : r3ds.romLocal ? 'downloaded copy' : 'streamed'})`); }
       else if (d.type === 'download') {
         r3ds.dl = d;
         if (d.done >= d.total) r3ds.romLocal = true;
@@ -163,8 +199,21 @@ async function start(source) {
       }
       else if (d.type === 'stats') { r3ds.bytesRead = d.bytesRead; r3ds.net = d; }
     };
+    worker.onerror = (e) => showError('ROM worker error: ' + (e.message || 'unknown'));
     worker.postMessage({ mem: Module.wasmMemory, ctl: Module._web_rom_ctl(), source });
     r3ds.worker = worker;
+    if (source.kind === 'file') $('log').style.display = 'block';   // boot diagnostics are the only feedback a generic build has
+    // the compositor ticks at 60 fps whether the guest lives or not — call
+    // out a game that never presents a frame instead of a silent black screen
+    let bootSecs = 0;
+    const bootWatch = setInterval(() => {
+      if (!r3ds.Module || Module._web_frame_count() > 0) { clearInterval(bootWatch); return; }
+      if ((bootSecs += 5) === 45) {
+        logLine('[web] 45s with no guest frame — the game is probably stuck waiting on a service the runtime does not implement yet (see the last "unhandled cmd" line below)');
+        $('status').textContent = 'booting… no guest frame yet — likely stalled on an unimplemented service (log below)';
+      }
+      if (bootSecs >= 300) clearInterval(bootWatch);
+    }, 5000);
     startAudio(Module);
     startSaveSync(Module);
     startLoop(Module);
@@ -717,7 +766,15 @@ async function init() {
     $('loading').textContent = 'This is the standalone build — pick a 3DS ROM to play.';
     $('romPick').hidden = false;
     $('romBtn').onclick = () => $('romFile').click();
-    const useFile = (f) => { if (f && !r3ds.started) start({ kind: 'file', file: f }); };
+    const useFile = async (f) => {
+      if (!f || r3ds.started) return;
+      $('loading').textContent = 'checking ' + f.name + '…';
+      const c = await checkRomFile(f).catch((e) => ({ ok: false, msg: String(e && e.message || e) }));
+      if (!c.ok) { showError(c.msg); $('loading').textContent = 'Pick a decrypted .3ds/.cci cartridge image or a .cxi.'; return; }
+      $('loading').textContent = 'booting ' + (c.product ? c.product + ' — ' : '') + f.name + '…';
+      r3ds.product = c.product;
+      start({ kind: 'file', file: f });
+    };
     $('romFile').onchange = () => useFile($('romFile').files[0]);
     window.addEventListener('dragover', (e) => { e.preventDefault(); });
     window.addEventListener('drop', (e) => { e.preventDefault(); useFile(e.dataTransfer.files && e.dataTransfer.files[0]); });

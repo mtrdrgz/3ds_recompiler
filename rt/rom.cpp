@@ -30,6 +30,8 @@ bool rom_open(const std::string &path) {
             " the recompilation needs a decrypted (NoCrypto) image.");
         return false;
     }
+    char prod[17]; memcpy(prod, ncch + 0x150, 16); prod[16] = 0;
+    INFO("[rom] product code %s", prod);
     u64 ivfc = g_ncch + (u64)le<u32>(ncch + 0x1B0) * MU;
     u8 h[0x60];
     if (!rd(h, sizeof h, ivfc) || memcmp(h, "IVFC", 4)) { LOG("[rom] RomFS IVFC header not found"); return false; }
