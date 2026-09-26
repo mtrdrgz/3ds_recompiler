@@ -1,0 +1,10 @@
+# Extra lift entry points: code addresses the runtime once had to interpret,
+# collected from miss logs while playing (R3DS_MISS_LOG=miss.log). One hex
+# address per line; the lifter validates each before using it as a seed.
+#
+# Workflow for a new ROM:
+#   1. run the interpreter-only build (R3DS_INTERP=1) or a lifted build;
+#      addresses the dispatcher misses are appended to miss.log
+#   2. cat miss.log >> lift/seeds.txt   (or leave miss.log in place — the
+#      lifter reads both)
+#   3. re-run tools/lift_rom.sh

@@ -1,0 +1,22 @@
+{
+ "name": "3DS Recompiler",
+ "short_name": "recomp3ds",
+ "display": "fullscreen",
+ "display_override": [
+  "fullscreen",
+  "standalone"
+ ],
+ "orientation": "landscape",
+ "background_color": "#000000",
+ "theme_color": "#000000",
+ "start_url": "./",
+ "scope": "./",
+ "icons": [
+  {
+   "src": "icon.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any"
+  }
+ ]
+}

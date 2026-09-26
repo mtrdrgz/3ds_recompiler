@@ -1,0 +1,25 @@
+# Cloudflare Worker for hosting a web build (see src/worker.js).
+#   wrangler secret put HF_TOKEN     # read-only token for the private dataset
+#   wrangler secret put ACCESS_KEY   # any password; open https://<host>/?key=<it> once per device
+#   wrangler deploy
+name = "recomp3ds"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Host it on your own domain (the build contains code generated from your
+# ROM — keep it private), e.g.:
+# routes = [{ pattern = "play.example.com", custom_domain = true }]
+
+[vars]
+# Hugging Face dataset holding the ROM pack + brotli-compressed site
+# (deploy/stage.sh). Keep the dataset private.
+HF_REPO = "you/your-private-dataset"
+BUILD = "web"
+
+[[durable_objects.bindings]]
+name = "MULTIPLAYER_ROOM"
+class_name = "MultiplayerRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MultiplayerRoom"]

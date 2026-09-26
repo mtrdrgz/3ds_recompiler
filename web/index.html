@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
+<link rel="apple-touch-icon" href="icon.png">
+<title>3DS Recompiler</title>
+<style>
+  :root { --bg: #15171c; --panel: #1f232b; --fg: #e8e8ea; --dim: #9aa0aa; --accent: #f0b24a; --err: #ff7a6b; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  h1 small { color: var(--dim); font-weight: normal; font-size: 13px; }
+  .panel { background: var(--panel); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
+  button { background: var(--accent); color: #1a1a1a; border: 0; border-radius: 7px; padding: 8px 14px;
+    font-weight: 600; cursor: pointer; font-size: 14px; }
+  button.sec { background: #3a404c; color: var(--fg); }
+  button.rec { background: #b3261e; color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text] { flex: 1; min-width: 220px; background: #111317; color: var(--fg); border: 1px solid #3a404c;
+    border-radius: 7px; padding: 7px 9px; font-size: 14px; }
+  label { color: var(--dim); }
+  .err { color: var(--err); white-space: pre-wrap; }
+  .dim { color: var(--dim); font-size: 13px; }
+  #stage { display: none; flex-direction: column; align-items: center; }
+  main.playing { max-width: none; padding: 8px; }
+  #screen { width: 100%; height: calc(100vh - 70px); display: block; background: #000; touch-action: none; border-radius: 6px; }
+  #screen:fullscreen { height: 100vh; border-radius: 0; }
+  #bar { width: 100%; display: flex; justify-content: space-between; gap: 8px; margin: 8px 0;
+    font-size: 13px; color: var(--dim); flex-wrap: wrap; }
+  #settings { display: none; position: fixed; right: 16px; top: 16px; width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 32px);
+    overflow: auto; background: rgba(24,27,33,.97); border: 1px solid #3a404c; border-radius: 10px; padding: 12px 14px; z-index: 10; font-size: 14px; }
+  #settings h3 { margin: 4px 0 8px; font-size: 15px; }
+  #settings .opt { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 7px 0; }
+  #settings select, #settings input[type=range] { width: 170px; }
+  #settings select { background: #111317; color: var(--fg); border: 1px solid #3a404c; border-radius: 6px; padding: 4px; }
+  #settings .hint { color: var(--dim); font-size: 12px; margin: 2px 0 8px; }
+  #log { display: none; width: 100%; height: 180px; overflow: auto; background: #0c0d10; font: 12px/1.35 ui-monospace, monospace;
+    padding: 8px; border-radius: 6px; white-space: pre-wrap; color: #b8bcc4; }
+  kbd { background: #2c313b; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  table.keys td { padding: 2px 10px 2px 0; }
+  #pad { display: none; position: fixed; inset: auto 0 0 0; pointer-events: none; }
+  body.touch #pad { display: block; }
+  .vb { position: fixed; pointer-events: auto; width: 54px; height: 54px; border-radius: 50%; background: rgba(255,255,255,.14);
+    border: 1px solid rgba(255,255,255,.25); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none; font-size: 15px; }
+  .vb.on { background: rgba(240,178,74,.55); }
+  /* playing: the game fills the screen, nothing scrolls or zooms; Esc (or the
+     small ⋯ button on touch screens) opens the menu */
+  body.playing { position: fixed; inset: 0; overflow: hidden; overscroll-behavior: none; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; background: #000; }
+  body.playing main { position: fixed; inset: 0; max-width: none; padding: 0; }
+  body.playing main > h1, body.playing main > .panel { display: none !important; }
+  body.playing #stage { position: fixed; inset: 0; }
+  body.playing #screen { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; }
+  body.playing #bar { display: none; position: fixed; top: 0; left: 0; right: 0; margin: 0; z-index: 9; color: var(--fg);
+    background: rgba(15,17,21,.94); padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+    touch-action: auto; -webkit-user-select: text; user-select: text; }
+  body.playing.menu #bar { display: flex; }
+  body.playing #bar button { margin: 3px 0; }
+  body.playing #log { position: fixed; left: 0; right: 0; bottom: 0; height: 40vh; z-index: 9; border-radius: 0; touch-action: auto; }
+  body.playing #settings { touch-action: auto; overscroll-behavior: contain; -webkit-user-select: text; user-select: text; }
+  #hud { display: none; position: fixed; z-index: 5; pointer-events: none; font: 12px/1.3 ui-monospace, monospace;
+    color: rgba(255,255,255,.75); text-shadow: 0 1px 2px #000; top: max(6px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); }
+  body.playing #hud { display: block; }
+  body.playing.menu #hud, body.playing.menu #pad { display: none; }
+  #menuBtn { display: none; position: fixed; z-index: 8; top: max(4px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    width: 56px; height: 26px; border-radius: 13px; padding: 0; background: rgba(255,255,255,.14); color: #fff;
+    border: 1px solid rgba(255,255,255,.22); font-size: 16px; line-height: 1; opacity: .6; }
+  body.playing.touch #menuBtn { display: block; }
+  body.playing.menu #menuBtn { display: none; }
+</style>
+<!-- rounded face for the GPU renderer's high-resolution text (rt/hwr_fonts.cpp) -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700&display=block">
+</head>
+<body>
+<main>
+  <h1>3DS Recompiler <small>static recompilation · WebAssembly</small></h1>
+
+  <section class="panel" id="setup">
+    <p id="loading">Loading the game…</p>
+    <div class="err" id="err"></div>
+    <p class="dim" id="env"></p>
+  </section>
+
+  <section id="stage">
+    <canvas id="screen" width="400" height="480"></canvas>
+    <div id="bar">
+      <span id="status">starting…</span>
+      <span>
+        <button id="resume">Resume ▶</button>
+        <button class="sec" id="gear">Display ⚙</button>
+        <button class="sec" id="fs">Fullscreen</button>
+        <button class="sec" id="mute">Mute</button>
+        <button class="sec" id="exportSave">Export save</button>
+        <button class="sec" id="importSave">Import save</button>
+        <input id="importFile" type="file" accept=".json,.sav,.fsd,.bin,.dat" multiple hidden>
+        <button class="sec" id="toggleLog">Log</button>
+        <button class="sec" id="rec" title="Record counters and the log while you play, then download them">● Record log</button>
+      </span>
+    </div>
+    <div id="log"></div>
+  </section>
+
+  <section class="panel">
+    <b>Controls</b>
+    <table class="keys">
+      <tr><td>D-pad</td><td><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></td><td>Circle pad</td><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></td></tr>
+      <tr><td>A / B</td><td><kbd>K</kbd> / <kbd>J</kbd></td><td>X / Y</td><td><kbd>I</kbd> / <kbd>U</kbd></td></tr>
+      <tr><td>L / R</td><td><kbd>Q</kbd> / <kbd>E</kbd></td><td>Start / Select</td><td><kbd>Enter</kbd> / <kbd>Backspace</kbd></td></tr>
+      <tr><td>Touch screen</td><td colspan="3">mouse or finger on the bottom screen · gamepads work (Nintendo layout by position)</td></tr>
+      <tr><td>Whole bottom screen</td><td colspan="3">hold <kbd>Tab</kbd> (remaster layout) · layout, upscaling and widescreen options under <b>Display ⚙</b></td></tr>
+      <tr><td>Quick display keys</td><td colspan="3"><kbd>1</kbd> layout · <kbd>2</kbd> bottom screen position · <kbd>3</kbd> remove its background · while the bottom screen shows a menu, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move the cursor (D-pad) and the arrows become the circle pad</td></tr>
+    </table>
+  </section>
+</main>
+<div id="settings">
+  <h3>Display</h3>
+  <div class="opt"><label>Layout</label><select data-k="layout">
+    <option value="remaster">Remaster (bottom UI over the game)</option><option value="classic">Classic (stacked, Citra default)</option>
+    <option value="large">Large screen (Citra)</option><option value="side">Side by side</option><option value="top">Top screen only</option></select></div>
+  <div class="opt"><label>Bottom screen</label><select data-k="bottomMode">
+    <option value="auto">Automatic (UI / minimap)</option><option value="ui">Always large (UI)</option><option value="minimap">Always small (minimap)</option></select></div>
+  <div class="opt"><label>Remove its background</label><input type="checkbox" data-k="removeBg"></div>
+  <div class="hint">Remaster: menus float over the game without their background; screens that are mostly picture (the field map) become a corner minimap. Hold <b>Tab</b> to see the whole bottom screen.</div>
+  <div class="opt"><label>UI position</label><select data-k="uiAnchor">
+    <option value="br">Bottom right</option><option value="bc">Bottom centre</option><option value="bl">Bottom left</option>
+    <option value="tr">Top right</option><option value="tl">Top left</option></select></div>
+  <div class="opt"><label>WASD ↔ arrows in bottom menus</label><input type="checkbox" data-k="swapKeys"></div>
+  <div class="opt"><label>UI size</label><input type="range" min="0.3" max="1.2" step="0.02" data-k="uiScale"></div>
+  <div class="opt"><label>UI opacity</label><input type="range" min="0.3" max="1" step="0.02" data-k="uiOpacity"></div>
+  <div class="opt"><label>Minimap size</label><input type="range" min="0.2" max="0.6" step="0.02" data-k="miniScale"></div>
+  <div class="opt"><label>Minimap opacity</label><input type="range" min="0.3" max="1" step="0.02" data-k="miniOpacity"></div>
+  <div class="opt"><label>Minimap corner</label><select data-k="miniCorner">
+    <option value="br">Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option></select></div>
+  <h3>Picture</h3>
+  <div class="opt"><label>Renderer</label><select data-k="renderer">
+    <option value="auto">GPU (WebGPU) when available</option><option value="soft">Software (3DS resolution)</option></select></div>
+  <div class="opt"><label>Resolution</label><select data-k="res">
+    <option value="auto">Automatic (fits your screen)</option><option value="1">1× (400×240)</option><option value="2">2×</option>
+    <option value="3">3×</option><option value="4">4×</option><option value="5">5×</option><option value="6">6×</option></select></div>
+  <div class="opt"><label>HD textures</label><input type="checkbox" data-k="hdTextures"></div>
+  <div class="opt"><label>Upscaling</label><select data-k="filter">
+    <option value="hq">High quality (bicubic)</option><option value="smooth">Smooth (bilinear)</option><option value="pixel">Sharp pixels</option></select></div>
+  <div class="opt"><label>Aspect</label><select data-k="aspect">
+    <option value="auto">Widescreen, fit the window</option><option value="wide">Widescreen 16:9</option>
+    <option value="native">Original 5:3</option><option value="stretch">16:9 stretched</option></select></div>
+  <div class="opt"><label>Side bars</label><select data-k="sideFill">
+    <option value="blur">Blurred picture</option><option value="black">Black</option></select></div>
+  <div class="opt"><label>Show FPS</label><input type="checkbox" data-k="showFps"></div>
+  <div class="opt"><label>Full screen while playing</label><input type="checkbox" data-k="autoFs"></div>
+  <div class="hint" id="renderHint">With the GPU renderer the game is drawn at a multiple of the 3DS resolution that suits your screen. Widescreen shows more of the 3D world; 2D parts are stretched. Changing the renderer applies after a reload.</div>
+  <h3>Game data</h3>
+  <div class="opt"><label>Load the game</label><select data-k="romMode">
+    <option value="download">Download all once (smoother)</option><option value="stream">Stream while playing</option></select></div>
+  <div class="opt"><label>Downloaded copy</label><button class="sec" id="romDelete">Delete</button></div>
+  <div class="hint" id="romHint"></div>
+  <div class="opt"><button class="sec" id="resetSettings">Reset</button><button id="closeSettings">Close</button></div>
+</div>
+<div id="pad"></div>
+<div id="hud"></div>
+<button id="menuBtn" aria-label="Menu">⋯</button>
+<script src="compositor.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

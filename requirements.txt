@@ -1,0 +1,3 @@
+capstone>=5.0    # tools/disasm.py, lift/difftest.py
+unicorn>=2.1     # -DR3DS_UNICORN=ON fallback + difftest oracle
+brotli>=1.1      # tools/pack_rom.py (or install the brotli CLI instead)
