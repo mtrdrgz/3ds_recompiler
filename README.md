@@ -146,6 +146,11 @@ URL parameters: `?rom=<url>`, `&autostart=1`, `&env=NAME=VALUE` (repeatable),
 
 ### 4.1 Single-file build (`recomp3ds.html`)
 
+Hosted copy: **https://mtrdrgz.github.io/3ds_recompiler/** — the `gh-pages`
+branch serves the bundled file next to `coi-sw.js`, a service worker that
+adds the isolation headers GitHub Pages can't send. First visit installs it
+and reloads once; then it just works.
+
 ```bash
 # build an interpreter-only wasm (no lifted code) and bundle everything into
 # one HTML file: runtime, page, workers, worklet, icon

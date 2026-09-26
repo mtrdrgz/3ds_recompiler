@@ -62,9 +62,10 @@ function logLine(s) {
 // ------------------------------------------------ cross-origin isolation
 async function ensureIsolation() {
   if (self.crossOriginIsolated) return true;
-  // the bundled service worker can only help the multi-file build; a single
-  // file cannot register one (blob: is not a valid SW script URL)
-  if (!EMBED.mod && 'serviceWorker' in navigator && !sessionStorage.getItem('coi-reloaded')) {
+  // a coi-sw.js served next to the page fixes isolation on static hosts
+  // (GitHub Pages and friends send no headers); on file:// there is no
+  // navigator.serviceWorker at all, so this fails through to the message
+  if ('serviceWorker' in navigator && !sessionStorage.getItem('coi-reloaded')) {
     try {
       await navigator.serviceWorker.register('coi-sw.js');
       await navigator.serviceWorker.ready;
@@ -74,7 +75,7 @@ async function ensureIsolation() {
     } catch (e) { /* fall through */ }
   }
   const how = EMBED.mod ?
-    'Serve this file over HTTP(S) — e.g. `python3 -m http.server` cannot set headers, use tools/serve_web.py or any host that sends the headers below. file:// pages can never be cross-origin isolated.' :
+    'Serve this file over HTTP(S) together with the repo\'s coi-sw.js — e.g. tools/serve_web.py (it sets the headers), or any static host where coi-sw.js can install as a service worker. file:// pages can never be cross-origin isolated.' :
     'Serve it with tools/serve_web.py (it sets the headers), or over https/localhost so the bundled service worker can add them.';
   showError('This page needs cross-origin isolation (SharedArrayBuffer for threads).\n' +
             '  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n' + how);
