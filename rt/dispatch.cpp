@@ -1,5 +1,6 @@
 #include "cpu.h"
 #include "mem.h"
+#include "gen.h"
 #include <vector>
 #include <atomic>
 
@@ -17,12 +18,21 @@ void disp_init() {   // call after rom_load_code(): sizes come from the exheader
 void disp_register(u32 pc, ChunkFn fn) {
     u32 i = pc - IMG_BASE;
     if (i < g_table_n) g_table[i] = fn;
+    gen_mark_host(pc);   // generated code hands this pc back to the runtime
 }
 
-ChunkFn disp_lookup(u32 pc) {
+static ChunkFn raw_lookup(u32 pc) {
     u32 i = pc - IMG_BASE;
     if (i >= g_table_n) return nullptr;
     return g_table[i];
+}
+
+// stands for "there is generated code at this pc" (never called)
+static u32 gen_marker(Cpu &, u32 pc) { return pc; }
+
+ChunkFn disp_lookup(u32 pc) {
+    if (ChunkFn f = raw_lookup(pc)) return f;
+    return gen_entry(pc) > 1 ? gen_marker : nullptr;
 }
 
 std::atomic<int> g_irq_pending{0};
@@ -31,6 +41,13 @@ void kernel_poll(Cpu &c);
 [[noreturn]] void disp_run(Cpu &c, u32 pc) {
     for (;;) {
         if (g_irq_pending.load(std::memory_order_relaxed)) { c.r[15] = pc & ~1u; c.thumb = pc & 1; kernel_poll(c); }
+        if (gen_active()) {
+            pc = gen_run(c, pc);   // returns on an interrupt, a hook, or code that was never translated
+            if (g_irq_pending.load(std::memory_order_relaxed)) continue;
+            ChunkFn h = raw_lookup(pc);
+            pc = h ? h(c, pc) : interp_run(c, pc);
+            continue;
+        }
         ChunkFn f = disp_lookup(pc);
         if (f) pc = f(c, pc);
         else pc = interp_run(c, pc);

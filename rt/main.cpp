@@ -9,6 +9,7 @@
 void interp_init();
 void disp_init();
 #include "rom.h"
+#include "gen.h"
 #ifdef R3DS_HAVE_LIFTED
 void lifted_register_all();   // generated
 extern const u32 g_lifted_code_hash, g_lifted_code_size;
@@ -100,6 +101,7 @@ int main(int argc, char **argv) {
     setup_config_mem();
 
     if (!g_interp_only) lifted_register_all();
+    if (!g_interp_only && !g_lifted_code_size) gen_init();   // web: translate the code image to wasm before boot
     extern void hle_hooks_register(); hle_hooks_register();
     services_init();
 

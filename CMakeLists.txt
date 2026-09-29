@@ -7,6 +7,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(UNICORN_ROOT "$ENV{UNICORN_ROOT}" CACHE PATH "unicorn root (include/ + lib/), e.g. <venv>/lib/python3.x/site-packages/unicorn")
 file(GLOB RT_SRC rt/*.cpp)
+file(GLOB TRANSLATOR_SRC web/translator/*.js)
 if(EMSCRIPTEN)
   # every object (lifted code included) must be built with threads enabled
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
@@ -31,6 +32,14 @@ if(EMSCRIPTEN)
   target_compile_options(recomp3ds PRIVATE -msimd128 -msse2 --use-port=emdawnwebgpu)
   target_compile_definitions(recomp3ds PRIVATE R3DS_WEBGPU=1)
   target_link_options(recomp3ds PRIVATE --use-port=emdawnwebgpu)
+  # the ARM -> WASM translator (web/translator) runs inside the runtime's own threads
+  add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/translator.bundle.js
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/bundle_translator.py -o ${CMAKE_BINARY_DIR}/translator.bundle.js
+    DEPENDS ${CMAKE_SOURCE_DIR}/tools/bundle_translator.py ${TRANSLATOR_SRC})
+  add_custom_target(translator_bundle DEPENDS ${CMAKE_BINARY_DIR}/translator.bundle.js)
+  add_dependencies(recomp3ds translator_bundle)
+  target_link_options(recomp3ds PRIVATE --pre-js ${CMAKE_BINARY_DIR}/translator.bundle.js -sALLOW_TABLE_GROWTH=1)
+  set_property(TARGET recomp3ds APPEND PROPERTY LINK_DEPENDS ${CMAKE_BINARY_DIR}/translator.bundle.js)
   target_link_options(recomp3ds PRIVATE
     -pthread -sPROXY_TO_PTHREAD=1 -sPTHREAD_POOL_SIZE=24 -sPTHREAD_POOL_SIZE_STRICT=0
     -sINITIAL_MEMORY=1073741824 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294967296
@@ -38,7 +47,7 @@ if(EMSCRIPTEN)
     -sMODULARIZE=1 -sEXPORT_NAME=createR3DS -sENVIRONMENT=web,worker
     -sEXIT_RUNTIME=0 -sALLOW_BLOCKING_ON_MAIN_THREAD=1
     "-sEXPORTED_RUNTIME_METHODS=['FS','ENV','IDBFS','wasmMemory','HEAPU8','addRunDependency','removeRunDependency']"
-    "-sEXPORTED_FUNCTIONS=['_main','_web_rom_ctl','_web_frame','_web_frame_count','_web_input','_web_audio_ring','_web_bottom_coverage','_web_bottom_masked','_web_hwr_start','_web_hwr_frame','_web_hwr_state','_web_hwr_out','_web_hwr_soft_alpha','_web_debug_stats']"
+    "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free','_gh_step','_gh_svc','_web_rom_ctl','_web_frame','_web_frame_count','_web_input','_web_audio_ring','_web_bottom_coverage','_web_bottom_masked','_web_hwr_start','_web_hwr_frame','_web_hwr_state','_web_hwr_out','_web_hwr_soft_alpha','_web_debug_stats']"
     -lidbfs.js)
   option(R3DS_WEB_DEBUG "web build with Emscripten assertions" OFF)
   if(R3DS_WEB_DEBUG)
