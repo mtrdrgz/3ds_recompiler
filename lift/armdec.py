@@ -15,6 +15,8 @@ Every decode returns an Insn:
   bad      unsupported: the emitter falls back to the interpreter
 """
 
+import re
+
 class Insn:
     __slots__ = ('addr', 'thumb', 'size', 'cond', 'body', 'targets', 'falls', 'call', 'bad', 'text', 'table', 'ptr_loads')
     def __init__(self, addr, thumb, size):
@@ -146,6 +148,8 @@ def dec_arm(addr, w):
                 dec_arm_cp(ins, w, pc)
     except NotImplementedError as e:
         ins.bad = str(e) or 'unimpl'
+    if not ins.bad and re.search(r'\br15\b', ins.body):
+        ins.bad = 'r15 operand'   # unpredictable encoding (usually data decoded as code): interpreter decides
     if ins.cond == 14 and ins.body.startswith('EXIT(') and ins.body.count(';') == 1:
         ins.falls = False
     return ins
