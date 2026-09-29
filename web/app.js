@@ -86,6 +86,8 @@ window.addEventListener('unhandledrejection', (e) => showError('unhandled runtim
 window.addEventListener('error', (e) => { if (r3ds.started && e.message) showError('runtime error: ' + e.message); });
 const logBuf = [];
 function logLine(s) {
+  if (s.startsWith('[gen] translating')) { const st = $('status'); if (st) st.textContent = 'translating the game to WebAssembly before boot…'; }
+  else if (s.startsWith('[gen] translated')) { const st = $('status'); if (st) st.textContent = 'game translated (' + s.slice(17) + ') — booting…'; }
   logBuf.push(s); if (logBuf.length > 400) logBuf.shift();
   if (capture) capture.lines.push(`${((performance.now() - capture.t0) / 1000).toFixed(2)}s ${s}`);
   const el = $('log'); if (el.style.display === 'block') { el.textContent = logBuf.join('\n'); el.scrollTop = el.scrollHeight; }
