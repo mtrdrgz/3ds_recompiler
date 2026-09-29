@@ -3,7 +3,7 @@
 #include <mutex>
 
 static PFile *g_rom;
-static u64 g_ncch, g_romfs_off, g_romfs_size;
+static u64 g_ncch, g_romfs_off, g_romfs_size, g_program_id;
 static const u64 MU = 0x200;
 
 static bool rd(void *b, u64 n, u64 off) { return pf_pread(g_rom, b, n, off) == (s64)n; }
@@ -31,7 +31,8 @@ bool rom_open(const std::string &path) {
         return false;
     }
     char prod[17]; memcpy(prod, ncch + 0x150, 16); prod[16] = 0;
-    INFO("[rom] product code %s", prod);
+    g_program_id = le<u64>(ncch + 0x118);
+    INFO("[rom] product code %s program id %016llx", prod, (unsigned long long)g_program_id);
     u64 ivfc = g_ncch + (u64)le<u32>(ncch + 0x1B0) * MU;
     u8 h[0x60];
     if (!rd(h, sizeof h, ivfc) || memcmp(h, "IVFC", 4)) { LOG("[rom] RomFS IVFC header not found"); return false; }
@@ -133,3 +134,4 @@ s64 rom_romfs_read(void *buf, u64 size, u64 off) {
     return pf_pread(g_rom, buf, size, g_romfs_off + off);
 }
 u64 rom_romfs_size() { return g_romfs_size; }
+u64 rom_program_id() { return g_program_id; }

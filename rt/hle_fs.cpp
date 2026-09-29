@@ -6,6 +6,7 @@
 namespace fsys = std::filesystem;
 
 #include "rom.h"
+#include "sysarch.h"
 static bool g_romfs_ready = false;
 static u64 g_romfs_size = 0;
 extern std::string g_save_root;
@@ -37,10 +38,12 @@ static std::string read_path(u32 type, u32 ptr, u32 size) {
 struct FileSvc : Service {
     PFile *fd = nullptr;
     bool rom = false;
+    const std::vector<u8> *mem = nullptr;   // synthesized system archive image (see sysarch.h)
     std::string host;
     FileSvc(std::string n) : Service(n) {}
-    ~FileSvc() { if (fd && !rom) pf_close(fd); }
+    ~FileSvc() { if (fd && !rom && !mem) pf_close(fd); }
     u64 size() {
+        if (mem) return mem->size();
         if (rom) return g_romfs_size;
         return pf_size(fd);
     }
@@ -50,7 +53,9 @@ struct FileSvc : Service {
             u64 off = ipc.p(1) | ((u64)ipc.p(2) << 32);
             u32 sz = ipc.p(3), dst = ipc.p(5);
             s64 n = 0;
-            if (rom) {
+            if (mem) {
+                if (off < mem->size()) { n = std::min<u64>(sz, mem->size() - off); memcpy(gp(dst), mem->data() + off, n); }
+            } else if (rom) {
                 n = rom_romfs_read(gp(dst), sz, off);
             } else {
                 n = pf_pread(fd, gp(dst), sz, off);
@@ -63,20 +68,20 @@ struct FileSvc : Service {
         case 0x0803: {  // Write(off64, size, flags, desc, ptr)
             u64 off = ipc.p(1) | ((u64)ipc.p(2) << 32);
             u32 sz = ipc.p(3), src = ipc.p(6);
-            s64 n = rom ? 0 : pf_pwrite(fd, gp(src), sz, off);
+            s64 n = (rom || mem) ? 0 : pf_pwrite(fd, gp(src), sz, off);
             if (n < 0) n = 0;
             ipc.reply(2, 2); ipc.w(2, (u32)n); ipc.w(3, (sz << 4) | 0xA); ipc.w(4, src);
             break;
         }
         case 0x0804: { u64 s = size(); ipc.reply(3, 0); ipc.w(2, (u32)s); ipc.w(3, (u32)(s >> 32)); break; }
-        case 0x0805: { if (!rom) pf_truncate(fd, ipc.p(1) | ((u64)ipc.p(2) << 32)); ipc.reply(1, 0); break; }
+        case 0x0805: { if (!rom && !mem) pf_truncate(fd, ipc.p(1) | ((u64)ipc.p(2) << 32)); ipc.reply(1, 0); break; }
         case 0x0808: ipc.reply(1, 0); break;  // Close
         case 0x0809: ipc.reply(1, 0); break;  // Flush
         case 0x080A: case 0x080B: ipc.reply(1, 0); break;  // SetPriority etc
         case 0x080C: {  // OpenLinkFile
             auto f = std::make_shared<FileSvc>(name);
-            f->rom = rom; f->host = host;
-            if (!rom) f->fd = pf_open(host.c_str(), true, false);
+            f->rom = rom; f->mem = mem; f->host = host;
+            if (!rom && !mem) f->fd = pf_open(host.c_str(), true, false);
             ipc.reply(1, 2); ipc.w(2, 0x10); ipc.w(3, new_session_handle(f));
             break;
         }
@@ -111,7 +116,7 @@ struct DirSvc : Service {
     }
 };
 
-struct Archive { u32 id; std::string root; bool rom; };
+struct Archive { u32 id; std::string root; bool rom; const std::vector<u8> *mem = nullptr; };
 static std::map<u64, Archive> g_archives;
 static u64 g_arch_next = 0x100000001ull;
 
@@ -126,7 +131,14 @@ static std::string archive_root(u32 id, u32 ptype, u32 pptr, u32 psize) {
 
 static Result open_archive(u32 id, u32 ptype, u32 pptr, u32 psize, u64 &out) {
     Archive a{id, "", id == 3};
-    if (id == 3 || id == 0x2345678A) { romfs_init(); a.rom = true; }
+    if (id == 0x2345678A) {   // a title's own RomFS, addressed by program id (binary path: lo, hi, media, ...)
+        u64 title = ptype == 2 && psize >= 8 ? ((u64)rd32(pptr + 4) << 32) | rd32(pptr) : 0;
+        if (title == rom_program_id()) { romfs_init(); a.rom = true; }
+        else if ((a.mem = sysarch_romfs(title)) == nullptr) {
+            LOG("[fs] OpenArchive 2345678a: title %016llx is not installed and has no built-in replacement", (unsigned long long)title);
+            return 0xC8804470;
+        } else INFO("[fs] OpenArchive 2345678a: title %016llx served from the built-in system archive", (unsigned long long)title);
+    } else if (id == 3) { romfs_init(); a.rom = true; }
     else {
         a.root = archive_root(id, ptype, pptr, psize);
         if (id == 4 && !fsys::exists(a.root)) {
@@ -149,7 +161,10 @@ static Result open_archive(u32 id, u32 ptype, u32 pptr, u32 psize, u64 &out) {
 
 static Result open_file(const Archive &a, u32 ptype, u32 pptr, u32 psize, u32 flags, u32 &handle) {
     auto f = std::make_shared<FileSvc>("file");
-    if (a.rom) {
+    if (a.mem) {
+        f->mem = a.mem;
+        f->name = "sysarch";
+    } else if (a.rom) {
         romfs_init();
         f->rom = true;
         f->name = "romfs";
